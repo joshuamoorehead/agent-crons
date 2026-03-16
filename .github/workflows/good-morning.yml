@@ -1,0 +1,18 @@
+name: Good Morning (TEST)
+
+on:
+  # Daily at 11:30 UTC (6:30 AM ET)
+  schedule:
+    - cron: "30 11 * * *"
+  # Allow manual trigger for testing
+  workflow_dispatch:
+
+jobs:
+  send-greeting:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post Good Morning to Discord
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d '{"content": "Good morning from Marcus 🦅"}'
