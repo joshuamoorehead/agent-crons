@@ -11,7 +11,6 @@ import os
 import json
 import requests
 from urllib.parse import urlencode
-from bs4 import BeautifulSoup
 
 
 def scrape_greenhouse_api(company_slug, keywords=None):
