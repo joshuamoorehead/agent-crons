@@ -10,11 +10,18 @@ Daily intelligence digest for ML research, jobs, weather, financial/political ne
 - **Hacker News:** Front page AI/ML stories
 - **Keywords:** MLOps, distributed training, inference serving, feature store, data pipeline, systems ML, CUDA, PyTorch
 
-### 💼 Job Scan
-Companies monitored:
-- Google, Meta, Anthropic, Databricks, NVIDIA
-- Scale AI, Anyscale, Modal
-- Edge Case Research, M Science, MERL
+### 💼 Job Scan (Internships & Entry-Level)
+**Focus:** Summer 2026, Fall 2026 internships + new grad roles in ML/infrastructure/data/software
+
+**Sources:**
+- Greenhouse API: Anthropic, Databricks, Scale AI, OpenAI
+- Lever API: Anyscale
+- LinkedIn Jobs (best-effort, auth required)
+- Indeed (best-effort, often blocks scrapers)
+
+**Filters:**
+- Keywords: internship, new grad, entry level, university, recent grad
+- Fields: ML, infrastructure, data, software, backend, systems, platform
 
 ### 🌤️ Weather
 - Pittsburgh forecast (high/low, conditions, precipitation)
