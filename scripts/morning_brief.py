@@ -15,13 +15,17 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
 import xml.etree.ElementTree as ET
-from job_scraper import aggregate_jobs
+from job_scraper import aggregate_jobs, post_jobs_to_discord
 
 # ========== Configuration ==========
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 AGENT_EMAIL = os.environ.get("AGENT_EMAIL")
 AGENT_EMAIL_APP_PASSWORD = os.environ.get("AGENT_EMAIL_APP_PASSWORD")
 DISCORD_WEBHOOK_BRIEF = os.environ.get("DISCORD_WEBHOOK_BRIEF")
+DISCORD_WEBHOOK_JOBS = os.environ.get("DISCORD_WEBHOOK_JOBS")
+
+# Email recipient (Joshua's personal email)
+JOSHUA_EMAIL = "jtmoorehead1@gmail.com"
 
 RSS_FEEDS = [
     "https://ai.googleblog.com/feeds/posts/default",
@@ -36,17 +40,6 @@ RSS_FEEDS = [
 ]
 
 ARXIV_CATEGORIES = ["cs.LG", "cs.DC", "cs.DB", "cs.PF"]
-
-JOB_COMPANIES = [
-    ("Google", "https://www.google.com/about/careers/applications/jobs/results/"),
-    ("Meta", "https://www.metacareers.com/jobs/"),
-    ("Anthropic", "https://boards.greenhouse.io/anthropic"),
-    ("Databricks", "https://www.databricks.com/company/careers"),
-    ("NVIDIA", "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"),
-    ("Scale AI", "https://scale.com/careers"),
-    ("Anyscale", "https://jobs.lever.co/anyscale"),
-    ("Modal", "https://modal.com/careers"),
-]
 
 # Joshua's profile for context
 PROFILE = {
@@ -66,13 +59,13 @@ def llm_explain(title, summary, context=""):
     
     prompt = f"""You are Marcus, Joshua's executive assistant. He's a CMU MS student focused on ML infrastructure (PyTorch, CUDA, distributed training, model serving).
 
-Explain in 2-3 sentences why this matters to him:
+Explain in 2-3 sentences why this matters to him. Be sharp and opinionated about its importance.
 
 Title: {title}
 Summary: {summary}
 {f'Context: {context}' if context else ''}
 
-Focus on: practical implications for ML systems work, career relevance, technical insights."""
+Focus on: practical implications for ML systems work, career relevance, technical insights he can use."""
     
     try:
         response = requests.post(
@@ -128,9 +121,9 @@ def fetch_weather():
             clothing = "Light clothes. Warm day."
         
         if precip > 60:
-            clothing += " Bring an umbrella ({}% rain).".format(precip)
+            clothing += f" Bring an umbrella ({precip}% rain)."
         elif precip > 30:
-            clothing += " Rain possible ({}%).".format(precip)
+            clothing += f" Rain possible ({precip}%)."
         
         return {
             "temp": temp_f,
@@ -180,8 +173,8 @@ def fetch_arxiv_papers():
         except Exception as e:
             print(f"⚠️ Failed to fetch arXiv {category}: {e}")
     
-    # Get top 5 and explain why they matter
-    top_papers = papers[:5]
+    # Get top 3 and explain why they matter
+    top_papers = papers[:3]
     for paper in top_papers:
         paper["explanation"] = llm_explain(
             paper["title"],
@@ -208,11 +201,11 @@ def fetch_rss_feeds():
         except Exception as e:
             print(f"⚠️ Failed to fetch {feed_url}: {e}")
     
-    # Explain top 5
-    for item in items[:5]:
+    # Explain top 3
+    for item in items[:3]:
         item["explanation"] = llm_explain(item["title"], item["summary"], f"From {item['source']}")
     
-    return items[:5]
+    return items[:3]
 
 
 def fetch_hackernews():
@@ -232,7 +225,7 @@ def fetch_hackernews():
                     "title": story.get("title"),
                     "link": story.get("url", f"https://news.ycombinator.com/item?id={story_id}"),
                 })
-                if len(stories) >= 3:
+                if len(stories) >= 2:
                     break
         
         return stories
@@ -246,7 +239,6 @@ def fetch_financial_news():
     items = []
     feeds = [
         "https://techcrunch.com/tag/venture-capital/feed/",
-        "https://www.bloomberg.com/feed/podcast/technology.xml",
     ]
     
     for feed_url in feeds:
@@ -262,15 +254,15 @@ def fetch_financial_news():
         except Exception as e:
             print(f"⚠️ Failed to fetch financial feed: {e}")
     
-    # Explain top 3
-    for item in items[:3]:
+    # Explain top 2
+    for item in items[:2]:
         item["explanation"] = llm_explain(
             item["title"],
             item["summary"],
             "Financial/VC news - focus on PE interest, tech valuations, funding trends"
         )
     
-    return items[:3]
+    return items[:2]
 
 
 def fetch_political_news():
@@ -278,7 +270,6 @@ def fetch_political_news():
     items = []
     feeds = [
         "https://www.politico.com/rss/technology.xml",
-        "https://www.theverge.com/rss/tech/index.xml",
     ]
     
     for feed_url in feeds:
@@ -306,42 +297,14 @@ def fetch_political_news():
     return items[:2]
 
 
-def fetch_nfl_news():
-    """Fetch major NFL updates (in season only)."""
-    try:
-        feed = feedparser.parse("https://www.espn.com/espn/rss/nfl/news")
-        items = []
-        for entry in feed.entries[:3]:
-            # Filter for major news only
-            if any(kw in entry.title.lower() for kw in ["playoff", "trade", "championship", "super bowl", "injury"]):
-                items.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                })
-        return items
-    except Exception as e:
-        print(f"⚠️ Failed to fetch NFL news: {e}")
-        return []
-
-
 def fetch_jobs():
-    """Scrape internships and entry-level roles from job boards."""
+    """Fetch internships and entry-level roles from job boards."""
     try:
         jobs = aggregate_jobs()
-        return jobs[:10]  # Top 10 most relevant
+        return jobs
     except Exception as e:
         print(f"⚠️ Job scraping failed: {e}")
-        # Fallback to career page links
-        return [
-            {
-                "company": company,
-                "title": f"{company} - Internships & Entry-Level",
-                "location": "Various",
-                "url": url,
-                "type": "Career Page"
-            }
-            for company, url in JOB_COMPANIES[:5]
-        ]
+        return []
 
 
 def generate_html_email(sections):
@@ -463,7 +426,7 @@ def generate_html_email(sections):
             html += f"\n<h2>{section['title']}</h2>\n"
             
             if section.get("priority"):
-                html += f'<div class="priority"><strong>Priority:</strong> {section["priority"]}</div>'
+                html += f'<div class="priority"><strong>Top Priority:</strong> {section["priority"]}</div>'
             
             for item in section['items']:
                 html += f"""
@@ -486,7 +449,7 @@ def generate_html_email(sections):
     return html
 
 
-def send_email(html_content):
+def send_email(html_content, recipient_email):
     """Send email via SMTP."""
     if not all([AGENT_EMAIL, AGENT_EMAIL_APP_PASSWORD]):
         print("⚠️ Email credentials not configured")
@@ -496,7 +459,7 @@ def send_email(html_content):
         msg = MIMEMultipart("alternative")
         msg["Subject"] = f"🦅 Morning Brief - {datetime.now().strftime('%B %d, %Y')}"
         msg["From"] = AGENT_EMAIL
-        msg["To"] = AGENT_EMAIL
+        msg["To"] = recipient_email
         
         msg.attach(MIMEText(html_content, "html"))
         
@@ -506,38 +469,68 @@ def send_email(html_content):
         server.send_message(msg)
         server.quit()
         
-        print("✅ Email sent successfully")
+        print(f"✅ Email sent successfully to {recipient_email}")
         return True
     except Exception as e:
         print(f"❌ Email failed: {e}")
         return False
 
 
-def send_discord(weather, top_items):
-    """Send concise summary to Discord."""
+def send_discord_brief(weather, top_items):
+    """Send concise summary to Discord #morning-brief using rich embeds."""
     if not DISCORD_WEBHOOK_BRIEF:
-        print("⚠️ Discord webhook not configured")
+        print("⚠️ Discord brief webhook not configured")
         return False
     
     try:
         today = datetime.now().strftime("%B %d, %Y")
-        content = f"**🦅 Morning Brief - {today}**\n\n"
+        
+        # Weather embed
+        embeds = []
         
         if weather:
-            content += f"🌤️ **{weather['high']}°F/{weather['low']}°F** in Pittsburgh ({weather['condition']})\n"
-            content += f"*{weather['clothing']}*\n\n"
+            embeds.append({
+                'title': f'🌤️ Weather - {weather["condition"]}',
+                'description': f"**{weather['high']}°F / {weather['low']}°F** in Pittsburgh\n\n{weather['clothing']}",
+                'color': 0x5865F2,  # Discord blurple
+            })
         
-        content += "**Top Items:**\n"
-        for item in top_items[:3]:
-            content += f"• [{item['title']}]({item['link']})\n"
+        # Top items embed
+        if top_items:
+            fields = []
+            for item in top_items[:10]:  # Max 10 items
+                fields.append({
+                    'name': item['title'][:256],  # Discord field name limit
+                    'value': f"[Read More]({item['link']})",
+                    'inline': False
+                })
+            
+            embeds.append({
+                'title': f'📰 Morning Brief - {today}',
+                'description': 'Top items from papers, news, and tech policy:',
+                'color': 0x57F287,  # Green
+                'fields': fields,
+                'footer': {
+                    'text': f'Full brief sent to {JOSHUA_EMAIL}'
+                }
+            })
         
-        content += f"\n*Full brief sent to {AGENT_EMAIL}*"
+        payload = {
+            'embeds': embeds,
+            'username': 'Morning Brief 🦅',
+        }
         
-        requests.post(DISCORD_WEBHOOK_BRIEF, json={"content": content}, timeout=10)
-        print("✅ Discord notification sent")
-        return True
+        response = requests.post(DISCORD_WEBHOOK_BRIEF, json=payload, timeout=10)
+        
+        if response.status_code == 204:
+            print("✅ Discord brief notification sent")
+            return True
+        else:
+            print(f"⚠️ Discord webhook failed: {response.status_code}")
+            return False
+    
     except Exception as e:
-        print(f"❌ Discord failed: {e}")
+        print(f"❌ Discord brief failed: {e}")
         return False
 
 
@@ -560,12 +553,13 @@ def main():
             "detail": weather['clothing'],
         })
     
-    # 2. Papers
+    # 2. Papers (Top 3 most relevant, bolded with explanations)
     print("📡 Fetching arXiv papers...")
     papers = fetch_arxiv_papers()
     if papers:
         sections.append({
             "title": "📄 Papers Worth Reading",
+            "priority": "These are the top 3 most relevant to ML systems work.",
             "items": [
                 {
                     "title": p["title"],
@@ -578,38 +572,50 @@ def main():
         })
         all_items.extend(papers)
     
-    # 3. ML/AI News
+    # 3. Jobs (separate Discord channel)
+    print("📡 Fetching job postings...")
+    jobs = fetch_jobs()
+    if jobs and DISCORD_WEBHOOK_JOBS:
+        print("📤 Posting jobs to Discord #jobs...")
+        post_jobs_to_discord(jobs, DISCORD_WEBHOOK_JOBS)
+    
+    # Add jobs to email as well
+    if jobs:
+        sections.append({
+            "title": "💼 Jobs - Internships & New Grad Roles",
+            "items": [
+                {
+                    "title": f"{job['company']} - {job['title']}",
+                    "link": job["url"],
+                    "explanation": f"{job['type']} role in {job['location']}. Good fit for ML/infrastructure/data background with PyTorch, CUDA, or distributed systems experience.",
+                    "meta": f"{job['type']} | {job['location']}"
+                }
+                for job in jobs[:15]  # Top 15 in email
+            ]
+        })
+    
+    # 4. ML/AI News
     print("📡 Fetching RSS feeds...")
     rss_items = fetch_rss_feeds()
-    if rss_items:
+    
+    print("📡 Fetching Hacker News...")
+    hn = fetch_hackernews()
+    
+    if rss_items or hn:
+        all_news = rss_items + hn
         sections.append({
             "title": "📰 ML/AI News",
             "items": [
                 {
                     "title": item["title"],
                     "link": item["link"],
-                    "explanation": item["explanation"],
-                    "meta": item["source"]
+                    "explanation": item.get("explanation", "Trending on Hacker News."),
+                    "meta": item.get("source", "Hacker News")
                 }
-                for item in rss_items
+                for item in all_news
             ]
         })
-        all_items.extend(rss_items)
-    
-    # 4. Hacker News
-    print("📡 Fetching Hacker News...")
-    hn = fetch_hackernews()
-    if hn and sections:
-        # Add to ML/AI News section
-        sections[-1]["items"].extend([
-            {
-                "title": item["title"],
-                "link": item["link"],
-                "explanation": "Trending on Hacker News.",
-                "meta": "Hacker News"
-            }
-            for item in hn
-        ])
+        all_items.extend(all_news)
     
     # 5. Financial
     print("📡 Fetching financial news...")
@@ -645,48 +651,15 @@ def main():
         })
         all_items.extend(political)
     
-    # 7. NFL (if in season)
-    print("📡 Fetching NFL news...")
-    nfl = fetch_nfl_news()
-    if nfl:
-        sections.append({
-            "title": "🏈 NFL",
-            "items": [
-                {
-                    "title": item["title"],
-                    "link": item["link"],
-                    "explanation": "Major NFL update.",
-                }
-                for item in nfl
-            ]
-        })
-    
-    # 8. Jobs (always last)
-    print("📡 Fetching job postings...")
-    jobs = fetch_jobs()
-    if jobs:
-        sections.append({
-            "title": "💼 Internships & Entry-Level Roles",
-            "items": [
-                {
-                    "title": f"{job['company']} - {job['title']}",
-                    "link": job["url"],
-                    "explanation": f"{job['type']} role in {job['location']}. Good fit for ML/infrastructure/data background with PyTorch, CUDA, or distributed systems experience.",
-                    "meta": f"{job['type']} | {job['location']}"
-                }
-                for job in jobs
-            ]
-        })
-    
     # Generate outputs
     print("📝 Generating email...")
     html = generate_html_email(sections)
     
-    print("📧 Sending email...")
-    send_email(html)
+    print(f"📧 Sending email to {JOSHUA_EMAIL}...")
+    send_email(html, JOSHUA_EMAIL)
     
-    print("💬 Sending Discord notification...")
-    send_discord(weather, all_items)
+    print("💬 Sending Discord brief notification...")
+    send_discord_brief(weather, all_items)
     
     print("✅ Morning brief complete!")
 

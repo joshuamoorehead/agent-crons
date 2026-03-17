@@ -30,6 +30,7 @@ jobs:
           AGENT_EMAIL: ${{ secrets.AGENT_EMAIL }}
           AGENT_EMAIL_APP_PASSWORD: ${{ secrets.AGENT_EMAIL_APP_PASSWORD }}
           DISCORD_WEBHOOK_BRIEF: ${{ secrets.DISCORD_WEBHOOK_BRIEF }}
+          DISCORD_WEBHOOK_JOBS: ${{ secrets.DISCORD_WEBHOOK_JOBS }}
         run: |
           python scripts/morning_brief.py
       
