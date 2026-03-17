@@ -15,6 +15,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
 import xml.etree.ElementTree as ET
+from job_scraper import aggregate_jobs
 
 # ========== Configuration ==========
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
@@ -324,11 +325,23 @@ def fetch_nfl_news():
 
 
 def fetch_jobs():
-    """Return job board links (actual scraping would require company-specific logic)."""
-    return [
-        {"company": company, "link": url}
-        for company, url in JOB_COMPANIES
-    ]
+    """Scrape internships and entry-level roles from job boards."""
+    try:
+        jobs = aggregate_jobs()
+        return jobs[:10]  # Top 10 most relevant
+    except Exception as e:
+        print(f"⚠️ Job scraping failed: {e}")
+        # Fallback to career page links
+        return [
+            {
+                "company": company,
+                "title": f"{company} - Internships & Entry-Level",
+                "location": "Various",
+                "url": url,
+                "type": "Career Page"
+            }
+            for company, url in JOB_COMPANIES[:5]
+        ]
 
 
 def generate_html_email(sections):
@@ -653,14 +666,15 @@ def main():
     jobs = fetch_jobs()
     if jobs:
         sections.append({
-            "title": "💼 Job Openings",
+            "title": "💼 Internships & Entry-Level Roles",
             "items": [
                 {
-                    "title": f"{job['company']} - ML/Data Infrastructure Careers",
-                    "link": job["link"],
-                    "explanation": f"Check {job['company']}'s career page for ML Systems, Infra, or FDE roles. Relevant for PyTorch/CUDA/distributed systems background.",
+                    "title": f"{job['company']} - {job['title']}",
+                    "link": job["url"],
+                    "explanation": f"{job['type']} role in {job['location']}. Good fit for ML/infrastructure/data background with PyTorch, CUDA, or distributed systems experience.",
+                    "meta": f"{job['type']} | {job['location']}"
                 }
-                for job in jobs[:5]
+                for job in jobs
             ]
         })
     
