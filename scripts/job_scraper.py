@@ -1,32 +1,17 @@
 #!/usr/bin/env python3
 """
 Job Scraper Module - Internships & Entry-Level Roles
-Focuses on: ML, Infrastructure, Data, Software Engineering
+Focuses on: ML Engineer, Software Engineer, Data Engineer, Data Infrastructure Engineer, 
+            ML Systems Engineer, Platform Engineer
 Target: Summer 2026, Fall 2026 internships + new grad roles
 """
 
 import re
+import os
 import json
 import requests
-from html.parser import HTMLParser
-from urllib.parse import urlencode, quote_plus
-
-
-class JobHTMLParser(HTMLParser):
-    """Simple HTML parser to extract job listings."""
-    def __init__(self):
-        super().__init__()
-        self.jobs = []
-        self.in_job = False
-        self.current_job = {}
-        
-    def handle_starttag(self, tag, attrs):
-        # Placeholder - can be customized per site
-        pass
-    
-    def handle_data(self, data):
-        # Placeholder - can be customized per site
-        pass
+from urllib.parse import urlencode
+from bs4 import BeautifulSoup
 
 
 def scrape_greenhouse_api(company_slug, keywords=None):
@@ -134,122 +119,83 @@ def scrape_lever_api(company_slug, keywords=None):
         return []
 
 
-def scrape_linkedin_jobs(keywords="ML internship 2026", location="United States"):
+def search_linkedin_jobs(search_queries, location="United States"):
     """
-    Scrape LinkedIn Jobs (limited without authentication).
+    Search LinkedIn Jobs for entry-level roles.
     
-    Note: LinkedIn heavily rate-limits and blocks scraping. This is a best-effort
-    attempt using their public job search page.
+    Note: Returns search URLs for manual checking. LinkedIn heavily rate-limits scraping.
     
     Args:
-        keywords: Search query
+        search_queries: List of job title search queries
         location: Location filter
     
     Returns:
-        List of job dicts (may be empty if blocked)
+        List of search result dicts with URLs to check manually
     """
-    try:
-        params = {
-            'keywords': keywords,
-            'location': location,
-            'f_E': '1,2',  # Entry level + Internship
-            'f_TPR': 'r2592000',  # Posted in last 30 days
-        }
-        
-        url = f"https://www.linkedin.com/jobs/search?{urlencode(params)}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"⚠️ LinkedIn blocked or unavailable (status: {response.status_code})")
-            return []
-        
-        # Very basic parsing - LinkedIn HTML is complex and changes frequently
-        # This is a placeholder approach
-        jobs = []
-        
-        # Look for job card patterns in HTML
-        # Note: This is fragile and may break; consider it a fallback only
-        matches = re.findall(r'<h3[^>]*>([^<]+)</h3>', response.text)
-        
-        for match in matches[:5]:  # Limit to top 5
-            if any(kw in match.lower() for kw in ['intern', 'ml', 'software', 'data']):
-                jobs.append({
-                    'company': 'LinkedIn Search',
-                    'title': match.strip(),
-                    'location': location,
-                    'url': url,
-                    'type': 'See LinkedIn',
-                })
-        
-        if not jobs:
-            print("⚠️ LinkedIn: No jobs parsed (likely requires authentication)")
-        
-        return jobs
+    jobs = []
     
-    except Exception as e:
-        print(f"⚠️ LinkedIn scraping error: {e}")
-        return []
+    for query in search_queries:
+        try:
+            params = {
+                'keywords': query,
+                'location': location,
+                'f_E': '1,2',  # Entry level + Internship
+                'f_TPR': 'r2592000',  # Posted in last 30 days
+                'f_WT': '2',  # Remote option
+            }
+            
+            url = f"https://www.linkedin.com/jobs/search?{urlencode(params)}"
+            
+            jobs.append({
+                'company': 'LinkedIn',
+                'title': f'{query} (Entry-Level / Internship)',
+                'location': location,
+                'url': url,
+                'type': 'Search Results',
+            })
+        
+        except Exception as e:
+            print(f"⚠️ LinkedIn URL generation error for '{query}': {e}")
+    
+    return jobs
 
 
-def scrape_indeed_jobs(query="ML internship", location="Pittsburgh, PA"):
+def search_indeed_jobs(search_queries, location="United States"):
     """
-    Scrape Indeed jobs (best-effort, Indeed blocks aggressive scraping).
+    Search Indeed for entry-level roles.
     
     Args:
-        query: Search query
+        search_queries: List of job title search queries
         location: Location filter
     
     Returns:
-        List of job dicts
+        List of search result dicts with URLs
     """
-    try:
-        params = {
-            'q': query,
-            'l': location,
-            'fromage': '30',  # Last 30 days
-            'jt': 'internship',  # Job type: internship
-        }
-        
-        url = f"https://www.indeed.com/jobs?{urlencode(params)}"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        }
-        
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code != 200:
-            print(f"⚠️ Indeed blocked or unavailable (status: {response.status_code})")
-            return []
-        
-        # Basic pattern matching (Indeed HTML is complex)
-        jobs = []
-        
-        # Look for job title patterns
-        title_matches = re.findall(r'<h2[^>]*>.*?<span[^>]*>([^<]+)</span>', response.text, re.DOTALL)
-        
-        for title in title_matches[:5]:
-            title = re.sub(r'\s+', ' ', title).strip()
-            if any(kw in title.lower() for kw in ['intern', 'ml', 'software', 'data', 'engineer']):
-                jobs.append({
-                    'company': 'Indeed Search',
-                    'title': title,
-                    'location': location,
-                    'url': url,
-                    'type': 'See Indeed',
-                })
-        
-        if not jobs:
-            print("⚠️ Indeed: No jobs parsed (may require different parsing)")
-        
-        return jobs
+    jobs = []
     
-    except Exception as e:
-        print(f"⚠️ Indeed scraping error: {e}")
-        return []
+    for query in search_queries:
+        try:
+            params = {
+                'q': query,
+                'l': location,
+                'fromage': '30',  # Last 30 days
+                'sc': '0kf%3Aexplvl%28ENTRY_LEVEL%29%3B',  # Entry level filter
+            }
+            
+            url = f"https://www.indeed.com/jobs?{urlencode(params)}"
+            
+            jobs.append({
+                'company': 'Indeed',
+                'title': f'{query} (Entry-Level)',
+                'location': location,
+                'url': url,
+                'type': 'Search Results',
+            })
+        
+        except Exception as e:
+            print(f"⚠️ Indeed URL generation error for '{query}': {e}")
+    
+    return jobs
 
 
 def aggregate_jobs():
@@ -262,6 +208,26 @@ def aggregate_jobs():
     all_jobs = []
     
     print("🔍 Scraping job boards for internships and entry-level roles...")
+    
+    # Define search queries for LinkedIn and Indeed
+    search_queries = [
+        "ML Engineer internship 2026",
+        "Software Engineer new grad 2026",
+        "Data Engineer entry level",
+        "Data Infrastructure Engineer internship",
+        "ML Systems Engineer new grad",
+        "Platform Engineer entry level",
+    ]
+    
+    # LinkedIn searches
+    print("   📡 Generating LinkedIn search URLs...")
+    linkedin_jobs = search_linkedin_jobs(search_queries)
+    all_jobs.extend(linkedin_jobs)
+    
+    # Indeed searches
+    print("   📡 Generating Indeed search URLs...")
+    indeed_jobs = search_indeed_jobs(search_queries)
+    all_jobs.extend(indeed_jobs)
     
     # Greenhouse companies
     greenhouse_companies = ['anthropic', 'databricks', 'scale', 'openai']
@@ -277,23 +243,7 @@ def aggregate_jobs():
         jobs = scrape_lever_api(company)
         all_jobs.extend(jobs)
     
-    # LinkedIn (best-effort)
-    print("   📡 Checking LinkedIn...")
-    linkedin_jobs = scrape_linkedin_jobs(
-        keywords="ML software data infrastructure internship 2026",
-        location="United States"
-    )
-    all_jobs.extend(linkedin_jobs)
-    
-    # Indeed (best-effort)
-    print("   📡 Checking Indeed...")
-    indeed_jobs = scrape_indeed_jobs(
-        query="ML software data internship summer 2026",
-        location="Pittsburgh, PA"
-    )
-    all_jobs.extend(indeed_jobs)
-    
-    print(f"\n✅ Found {len(all_jobs)} relevant jobs")
+    print(f"\n✅ Found {len(all_jobs)} job sources and listings")
     
     # Deduplicate by URL
     seen_urls = set()
@@ -306,12 +256,89 @@ def aggregate_jobs():
     return unique_jobs
 
 
+def post_jobs_to_discord(jobs, webhook_url):
+    """
+    Post job findings to Discord #jobs channel using rich embeds.
+    
+    Args:
+        jobs: List of job dicts
+        webhook_url: Discord webhook URL for #jobs channel
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    if not webhook_url:
+        print("⚠️ Discord jobs webhook not configured")
+        return False
+    
+    try:
+        # Group jobs by type
+        greenhouse_lever = [j for j in jobs if j['type'] in ['Internship', 'New Grad']]
+        search_links = [j for j in jobs if j['type'] == 'Search Results']
+        
+        # Create embeds
+        embeds = []
+        
+        # Direct job postings
+        if greenhouse_lever:
+            fields = []
+            for job in greenhouse_lever[:10]:  # Limit to 10
+                fields.append({
+                    'name': f"{job['company']} - {job['title']}",
+                    'value': f"📍 {job['location']} | {job['type']}\n[Apply Here]({job['url']})",
+                    'inline': False
+                })
+            
+            embeds.append({
+                'title': '💼 New Job Postings',
+                'description': 'Direct listings from company career pages:',
+                'color': 0x5865F2,  # Discord blurple
+                'fields': fields[:10],  # Discord limit: 25 fields per embed
+            })
+        
+        # Search links
+        if search_links:
+            fields = []
+            for job in search_links[:6]:  # Top 6 searches
+                fields.append({
+                    'name': f"{job['company']}: {job['title']}",
+                    'value': f"[View Results]({job['url']})",
+                    'inline': False
+                })
+            
+            embeds.append({
+                'title': '🔍 Job Board Searches',
+                'description': 'Pre-filtered searches for entry-level roles:',
+                'color': 0x57F287,  # Green
+                'fields': fields,
+            })
+        
+        # Send to Discord
+        payload = {
+            'embeds': embeds,
+            'username': 'Morning Brief 🦅',
+        }
+        
+        response = requests.post(webhook_url, json=payload, timeout=10)
+        
+        if response.status_code == 204:
+            print(f"✅ Posted {len(jobs)} jobs to Discord #jobs")
+            return True
+        else:
+            print(f"⚠️ Discord webhook failed: {response.status_code}")
+            return False
+    
+    except Exception as e:
+        print(f"❌ Failed to post jobs to Discord: {e}")
+        return False
+
+
 if __name__ == "__main__":
     # Test the scraper
     jobs = aggregate_jobs()
     
     print("\n📋 Results:")
-    for job in jobs[:10]:
+    for job in jobs[:15]:
         print(f"\n{job['company']} - {job['type']}")
         print(f"  {job['title']}")
         print(f"  📍 {job['location']}")
