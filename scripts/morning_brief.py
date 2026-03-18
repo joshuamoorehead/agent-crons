@@ -15,57 +15,92 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import smtplib
 import xml.etree.ElementTree as ET
-from job_scraper import aggregate_jobs, post_jobs_to_discord
 
 # ========== Configuration ==========
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 AGENT_EMAIL = os.environ.get("AGENT_EMAIL")
 AGENT_EMAIL_APP_PASSWORD = os.environ.get("AGENT_EMAIL_APP_PASSWORD")
 DISCORD_WEBHOOK_BRIEF = os.environ.get("DISCORD_WEBHOOK_BRIEF")
-DISCORD_WEBHOOK_JOBS = os.environ.get("DISCORD_WEBHOOK_JOBS")
 
 # Email recipient (Joshua's personal email)
 JOSHUA_EMAIL = "jtmoorehead1@gmail.com"
 
-RSS_FEEDS = [
-    "https://ai.googleblog.com/feeds/posts/default",
-    "https://www.anthropic.com/research.rss",
-    "https://ai.meta.com/blog/rss/",
-    "https://www.databricks.com/blog/category/engineering-blog/feed",
-    "https://huyenchip.com/feed.xml",
-    "https://www.deeplearning.ai/the-batch/rss/",
-    "https://jack-clark.net/feed/",
-    "https://openai.com/blog/rss/",
-    "https://huggingface.co/blog/feed.xml",
+# Curated motivational quotes
+QUOTES = [
+    # Marcus Aurelius
+    "You have power over your mind - not outside events. Realize this, and you will find strength.",
+    "The impediment to action advances action. What stands in the way becomes the way.",
+    "Waste no more time arguing about what a good man should be. Be one.",
+    "Very little is needed to make a happy life; it is all within yourself, in your way of thinking.",
+    
+    # David Goggins
+    "The only way you gain mental toughness is to do things you're not happy doing.",
+    "You are in danger of living a life so comfortable and soft, that you will die without ever realizing your true potential.",
+    "Suffering is the true test of life.",
+    
+    # Paul Graham
+    "The way to get startup ideas is not to try to think of startup ideas. It's to look for problems, preferably problems you have yourself.",
+    "Make something people want.",
+    "It's better to make a few people really happy than to make a lot of people semi-happy.",
+    
+    # Charlie Munger
+    "Spend each day trying to be a little wiser than you were when you woke up.",
+    "The best thing a human being can do is to help another human being know more.",
+    "In my whole life, I have known no wise people who didn't read all the time — none, zero.",
+    
+    # Seneca
+    "Luck is what happens when preparation meets opportunity.",
+    "We suffer more often in imagination than in reality.",
+    "It is not because things are difficult that we do not dare; it is because we do not dare that they are difficult.",
 ]
+
+RSS_FEEDS = {
+    "tech": [
+        "https://ai.googleblog.com/feeds/posts/default",
+        "https://www.anthropic.com/research.rss",
+        "https://ai.meta.com/blog/rss/",
+        "https://www.databricks.com/blog/category/engineering-blog/feed",
+        "https://huyenchip.com/feed.xml",
+        "https://www.deeplearning.ai/the-batch/rss/",
+        "https://jack-clark.net/feed/",
+        "https://openai.com/blog/rss/",
+        "https://huggingface.co/blog/feed.xml",
+    ],
+    "business": [
+        "https://techcrunch.com/tag/venture-capital/feed/",
+        "https://techcrunch.com/tag/mergers-and-acquisitions/feed/",
+    ],
+    "politics": [
+        "https://www.politico.com/rss/technology.xml",
+    ],
+    "markets": [
+        "https://www.cnbc.com/id/10000664/device/rss/rss.html",  # Markets
+    ]
+}
 
 ARXIV_CATEGORIES = ["cs.LG", "cs.DC", "cs.DB", "cs.PF"]
 
-# Joshua's profile for context
-PROFILE = {
-    "focus": "ML/Data Infrastructure, distributed systems, CUDA optimization",
-    "interests": "MLOps, model serving, training pipelines, PyTorch internals",
-    "career_goal": "ML Systems Engineer → Forward Deployed Engineer → technical leadership",
-    "current": "CMU ECE MS (Spring 2026), coursework in ML, systems, robotics",
-    "location": "Pittsburgh, PA",
-}
-
 # ========== Helper Functions ==========
 
-def llm_explain(title, summary, context=""):
+def llm_explain(title, summary, context="", category=""):
     """Use Claude Haiku to explain why this matters to Joshua."""
     if not OPENROUTER_API_KEY:
         return summary[:200] + "..."
     
-    prompt = f"""You are Marcus, Joshua's executive assistant. He's a CMU MS student focused on ML infrastructure (PyTorch, CUDA, distributed training, model serving).
+    category_prompts = {
+        "politics": "Explain how this affects tech companies, AI policy, or engineering careers. Be opinionated about its importance.",
+        "markets": "Explain the implications for tech stocks, AI investments, or the broader economy. Focus on what engineers should care about.",
+        "tech": "Explain why this matters for ML infrastructure work. Be sharp and opinionated about its technical or career relevance.",
+        "business": "Explain the strategic implications - M&A trends, funding signals, industry consolidation. What does this mean for the AI/ML landscape?",
+    }
+    
+    base_prompt = f"""You are Marcus, Joshua's executive assistant. He's a CMU MS student focused on ML infrastructure (PyTorch, CUDA, distributed training, model serving).
 
-Explain in 2-3 sentences why this matters to him. Be sharp and opinionated about its importance.
+Explain in 2-3 sentences why this matters to him. {category_prompts.get(category, 'Be sharp and opinionated about its importance.')}
 
 Title: {title}
 Summary: {summary}
-{f'Context: {context}' if context else ''}
-
-Focus on: practical implications for ML systems work, career relevance, technical insights he can use."""
+{f'Context: {context}' if context else ''}"""
     
     try:
         response = requests.post(
@@ -76,7 +111,7 @@ Focus on: practical implications for ML systems work, career relevance, technica
             },
             json={
                 "model": "anthropic/claude-haiku-4-5",
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": base_prompt}],
                 "max_tokens": 150,
             },
             timeout=15
@@ -138,9 +173,98 @@ def fetch_weather():
         return None
 
 
+def get_daily_quote():
+    """Get motivational quote (rotates daily)."""
+    day_of_year = datetime.now().timetuple().tm_yday
+    return QUOTES[day_of_year % len(QUOTES)]
+
+
+def is_recent(published_date, max_hours=48):
+    """Check if a feed item is from the last 48 hours."""
+    try:
+        if not published_date:
+            return True  # Include if no date
+        
+        # Parse various date formats
+        from email.utils import parsedate_to_datetime
+        pub_dt = parsedate_to_datetime(published_date) if isinstance(published_date, str) else published_date
+        
+        age = datetime.now(pub_dt.tzinfo) - pub_dt
+        return age.total_seconds() / 3600 <= max_hours
+    except:
+        return True  # Include if parsing fails
+
+
+def fetch_news_by_category():
+    """Fetch and categorize news from RSS feeds (last 48 hours only)."""
+    news = {
+        "politics": [],
+        "markets": [],
+        "tech": [],
+        "business": [],
+    }
+    
+    for category, feeds in RSS_FEEDS.items():
+        for feed_url in feeds:
+            try:
+                feed = feedparser.parse(feed_url)
+                for entry in feed.entries[:10]:  # Check top 10
+                    # Only include items from last 48 hours
+                    if not is_recent(entry.get("published", None)):
+                        continue
+                    
+                    news[category].append({
+                        "title": entry.title,
+                        "link": entry.link,
+                        "summary": entry.get("summary", "")[:500],
+                        "source": feed.feed.get("title", "Unknown"),
+                        "published": entry.get("published", ""),
+                    })
+            except Exception as e:
+                print(f"⚠️ Failed to fetch {feed_url}: {e}")
+    
+    return news
+
+
+def rank_and_explain_news(news_items, category, max_items=4):
+    """Rank news by relevance and generate explanations."""
+    # Filter for relevance based on category
+    relevance_keywords = {
+        "politics": ["ai", "tech", "policy", "regulation", "china", "semiconductor", "chip", "export"],
+        "markets": ["stock", "market", "fed", "rate", "inflation", "tech", "nvidia", "earnings"],
+        "tech": ["ai", "ml", "llm", "model", "training", "gpu", "cuda", "pytorch", "inference", "chip", "semiconductor"],
+        "business": ["acquisition", "merger", "funding", "valuation", "ipo", "deal", "investment"],
+    }
+    
+    keywords = relevance_keywords.get(category, [])
+    
+    # Score items by keyword match
+    scored = []
+    for item in news_items:
+        text = (item["title"] + " " + item.get("summary", "")).lower()
+        score = sum(1 for kw in keywords if kw in text)
+        if score > 0:  # Only keep relevant items
+            scored.append((score, item))
+    
+    # Sort by score and take top N
+    scored.sort(reverse=True, key=lambda x: x[0])
+    top_items = [item for _, item in scored[:max_items]]
+    
+    # Generate explanations
+    for item in top_items:
+        item["explanation"] = llm_explain(
+            item["title"],
+            item.get("summary", ""),
+            f"From {item['source']}",
+            category=category
+        )
+    
+    return top_items
+
+
 def fetch_arxiv_papers():
-    """Fetch recent arXiv papers and explain relevance."""
-    yesterday = (datetime.utcnow() - timedelta(days=1)).strftime("%Y%m%d")
+    """Fetch recent arXiv papers (last 48 hours) and explain relevance."""
+    cutoff = datetime.utcnow() - timedelta(hours=48)
     papers = []
     
     for category in ARXIV_CATEGORIES:
@@ -154,6 +278,13 @@ def fetch_arxiv_papers():
                 ns = {"atom": "http://www.w3.org/2005/Atom"}
                 
                 for entry in root.findall("atom:entry", ns):
+                    # Check publish date
+                    published = entry.find("atom:published", ns).text
+                    pub_date = datetime.strptime(published, "%Y-%m-%dT%H:%M:%SZ")
+                    
+                    if pub_date < cutoff:
+                        continue  # Skip old papers
+                    
                     title = entry.find("atom:title", ns).text.strip()
                     link = entry.find("atom:id", ns).text.strip()
                     summary = entry.find("atom:summary", ns).text.strip()
@@ -161,7 +292,7 @@ def fetch_arxiv_papers():
                     
                     # Filter for relevance
                     keywords = ["distributed", "training", "inference", "gpu", "cuda", "pytorch", 
-                               "optimization", "serving", "mlops", "pipeline", "system"]
+                               "optimization", "serving", "mlops", "pipeline", "system", "parallel"]
                     if any(kw in title.lower() or kw in summary.lower() for kw in keywords):
                         papers.append({
                             "title": title,
@@ -179,135 +310,72 @@ def fetch_arxiv_papers():
         paper["explanation"] = llm_explain(
             paper["title"],
             paper["summary"],
-            f"arXiv {paper['category']} paper by {paper['authors']}"
+            f"arXiv {paper['category']} paper by {paper['authors']}",
+            category="tech"
         )
     
     return top_papers
 
 
-def fetch_rss_feeds():
-    """Fetch RSS feeds and explain relevance."""
-    items = []
-    for feed_url in RSS_FEEDS:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:2]:  # Top 2 from each
-                items.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "source": feed.feed.get("title", "Unknown"),
-                    "summary": entry.get("summary", "")[:500],
-                })
-        except Exception as e:
-            print(f"⚠️ Failed to fetch {feed_url}: {e}")
+def find_top_story(all_news):
+    """Use LLM to identify the single most important story."""
+    if not all_news or not OPENROUTER_API_KEY:
+        return None
     
-    # Explain top 3
-    for item in items[:3]:
-        item["explanation"] = llm_explain(item["title"], item["summary"], f"From {item['source']}")
+    # Flatten all news
+    stories = []
+    for category, items in all_news.items():
+        for item in items[:3]:  # Top 3 per category
+            stories.append({
+                "category": category,
+                "title": item["title"],
+                "summary": item.get("summary", "")[:300],
+            })
     
-    return items[:3]
+    if not stories:
+        return None
+    
+    prompt = f"""You are Marcus, analyzing the news for Joshua (CMU MS student, ML infrastructure focus).
 
+From these stories, identify the SINGLE most important one for him to know about today. Consider:
+- Impact on tech industry, AI/ML field, or his career
+- Time sensitivity (does he need to know this NOW?)
+- Strategic importance for someone entering ML systems roles
 
-def fetch_hackernews():
-    """Fetch Hacker News AI/ML stories with explanations."""
+Stories:
+{json.dumps(stories, indent=2)}
+
+Reply with ONLY the exact title of the most important story. No explanation, just the title."""
+    
     try:
-        response = requests.get("https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10)
-        story_ids = response.json()[:30]
-        
-        stories = []
-        for story_id in story_ids:
-            story_response = requests.get(f"https://hacker-news.firebaseio.com/v0/item/{story_id}.json", timeout=5)
-            story = story_response.json()
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "anthropic/claude-haiku-4-5",
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": 100,
+            },
+            timeout=15
+        )
+        if response.status_code == 200:
+            top_title = response.json()["choices"][0]["message"]["content"].strip()
             
-            title = story.get("title", "").lower()
-            if any(kw in title for kw in ["ai", "ml", "machine learning", "llm", "gpt", "model", "pytorch", "cuda", "training"]):
-                stories.append({
-                    "title": story.get("title"),
-                    "link": story.get("url", f"https://news.ycombinator.com/item?id={story_id}"),
-                })
-                if len(stories) >= 2:
-                    break
-        
-        return stories
+            # Find the full story
+            for category, items in all_news.items():
+                for item in items:
+                    if item["title"] == top_title:
+                        return {**item, "category": category}
     except Exception as e:
-        print(f"⚠️ Failed to fetch Hacker News: {e}")
-        return []
-
-
-def fetch_financial_news():
-    """Fetch financial news with PE/tech focus."""
-    items = []
-    feeds = [
-        "https://techcrunch.com/tag/venture-capital/feed/",
-    ]
+        print(f"⚠️ Failed to identify top story: {e}")
     
-    for feed_url in feeds:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:2]:
-                summary = entry.get("summary", "")[:500]
-                items.append({
-                    "title": entry.title,
-                    "link": entry.link,
-                    "summary": summary,
-                })
-        except Exception as e:
-            print(f"⚠️ Failed to fetch financial feed: {e}")
-    
-    # Explain top 2
-    for item in items[:2]:
-        item["explanation"] = llm_explain(
-            item["title"],
-            item["summary"],
-            "Financial/VC news - focus on PE interest, tech valuations, funding trends"
-        )
-    
-    return items[:2]
+    return None
 
 
-def fetch_political_news():
-    """Fetch political news affecting tech/AI."""
-    items = []
-    feeds = [
-        "https://www.politico.com/rss/technology.xml",
-    ]
-    
-    for feed_url in feeds:
-        try:
-            feed = feedparser.parse(feed_url)
-            for entry in feed.entries[:2]:
-                if any(kw in entry.title.lower() for kw in ["ai", "tech", "policy", "regulation", "china"]):
-                    summary = entry.get("summary", "")[:500]
-                    items.append({
-                        "title": entry.title,
-                        "link": entry.link,
-                        "summary": summary,
-                    })
-        except Exception as e:
-            print(f"⚠️ Failed to fetch political feed: {e}")
-    
-    # Explain top 2
-    for item in items[:2]:
-        item["explanation"] = llm_explain(
-            item["title"],
-            item["summary"],
-            "Tech policy - focus on AI regulation, industry impact"
-        )
-    
-    return items[:2]
-
-
-def fetch_jobs():
-    """Fetch internships and entry-level roles from job boards."""
-    try:
-        jobs = aggregate_jobs()
-        return jobs
-    except Exception as e:
-        print(f"⚠️ Job scraping failed: {e}")
-        return []
-
-
-def generate_html_email(sections):
+def generate_html_email(weather, quote, top_story, news, papers):
     """Generate sharp executive briefing email."""
     today = datetime.now().strftime("%A, %B %d, %Y")
     
@@ -341,6 +409,46 @@ def generate_html_email(sections):
                 border-bottom: 2px solid #e5e7eb; 
                 padding-bottom: 8px; 
             }}
+            .weather-box {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin: 20px 0;
+            }}
+            .weather-temp {{
+                font-size: 24px;
+                font-weight: 700;
+                margin: 10px 0;
+            }}
+            .weather-detail {{
+                font-size: 15px;
+                opacity: 0.95;
+                line-height: 1.5;
+            }}
+            .quote-box {{
+                background: #fef3c7;
+                border-left: 4px solid #f59e0b;
+                padding: 18px;
+                margin: 25px 0;
+                border-radius: 4px;
+                font-style: italic;
+                font-size: 15px;
+                color: #92400e;
+            }}
+            .top-story {{
+                background: #fee2e2;
+                border-left: 4px solid #dc2626;
+                padding: 20px;
+                margin: 25px 0;
+                border-radius: 4px;
+            }}
+            .top-story-title {{
+                font-weight: 700;
+                font-size: 18px;
+                color: #991b1b;
+                margin-bottom: 10px;
+            }}
             .item {{ 
                 margin: 20px 0; 
                 padding: 15px;
@@ -370,33 +478,8 @@ def generate_html_email(sections):
             a:hover {{ 
                 text-decoration: underline; 
             }}
-            .weather {{ 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                color: white;
-                padding: 20px; 
-                border-radius: 10px; 
-                margin: 25px 0;
-            }}
-            .weather h2 {{
-                color: white;
-                border: none;
-                margin-top: 0;
-            }}
-            .weather-main {{
-                font-size: 18px;
-                font-weight: 600;
-                margin: 10px 0;
-            }}
-            .weather-detail {{
-                font-size: 14px;
-                opacity: 0.95;
-            }}
-            .priority {{
-                background: #fef3c7;
-                border-left: 4px solid #f59e0b;
-                padding: 15px;
-                margin: 20px 0;
-                border-radius: 4px;
+            .category-icon {{
+                margin-right: 5px;
             }}
             .footer {{
                 margin-top: 40px;
@@ -413,29 +496,78 @@ def generate_html_email(sections):
         <div class="subtitle">{today}</div>
     """
     
-    for section in sections:
-        if section.get("is_weather"):
+    # 1. Weather
+    if weather:
+        html += f"""
+        <div class="weather-box">
+            <div class="weather-temp">{weather['temp']}°F | {weather['condition']}</div>
+            <div class="weather-detail">High: {weather['high']}°F | Low: {weather['low']}°F</div>
+            <div class="weather-detail" style="margin-top: 10px; font-weight: 600;">{weather['clothing']}</div>
+        </div>
+        """
+    
+    # 2. Motivational Quote
+    html += f"""
+    <div class="quote-box">
+        "{quote}"
+    </div>
+    """
+    
+    # 3. Top Story (if identified)
+    if top_story:
+        html += f"""
+        <div class="top-story">
+            <div style="font-size: 12px; text-transform: uppercase; color: #991b1b; font-weight: 600; margin-bottom: 8px;">
+                ⚡ TOP STORY
+            </div>
+            <div class="top-story-title">
+                <a href="{top_story['link']}" style="color: #991b1b;">{top_story['title']}</a>
+            </div>
+            <div style="color: #7f1d1d; font-size: 14px;">
+                {top_story.get('explanation', '')}
+            </div>
+        </div>
+        """
+    
+    # 4. News Categories
+    category_config = {
+        "politics": {"title": "🌍 Global Politics", "emoji": "🌍"},
+        "markets": {"title": "📈 Markets", "emoji": "📈"},
+        "tech": {"title": "💻 Tech", "emoji": "💻"},
+        "business": {"title": "🏢 Business", "emoji": "🏢"},
+    }
+    
+    html += "<h2>📰 News Briefing</h2>"
+    
+    for category in ["politics", "markets", "tech", "business"]:
+        items = news.get(category, [])
+        if not items:
+            continue  # Skip empty categories
+        
+        config = category_config[category]
+        html += f"<h3 style='font-size: 16px; color: #4b5563; margin-top: 25px;'>{config['title']}</h3>"
+        
+        for item in items:
             html += f"""
-            <div class="weather">
-                <h2>{section['title']}</h2>
-                <div class="weather-main">{section['main']}</div>
-                <div class="weather-detail">{section['detail']}</div>
+            <div class="item">
+                <div class="item-title"><a href="{item['link']}">{item['title']}</a></div>
+                <div class="item-explanation">{item['explanation']}</div>
             </div>
             """
-        else:
-            html += f"\n<h2>{section['title']}</h2>\n"
-            
-            if section.get("priority"):
-                html += f'<div class="priority"><strong>Top Priority:</strong> {section["priority"]}</div>'
-            
-            for item in section['items']:
-                html += f"""
-                <div class="item">
-                    <div class="item-title"><a href="{item.get('link', '#')}">{item.get('title', 'Untitled')}</a></div>
-                    <div class="item-explanation">{item.get('explanation', item.get('summary', ''))}</div>
-                    {f"<div class='item-meta'>{item.get('meta', '')}</div>" if item.get('meta') else ""}
-                </div>
-                """
+    
+    # 5. Papers
+    if papers:
+        html += "<h2>📄 Papers Worth Reading</h2>"
+        html += "<p style='color: #6b7280; font-size: 14px; margin-top: 10px;'>Recent arXiv papers relevant to ML systems work:</p>"
+        
+        for paper in papers:
+            html += f"""
+            <div class="item">
+                <div class="item-title"><a href="{paper['link']}">{paper['title']}</a></div>
+                <div class="item-explanation">{paper['explanation']}</div>
+                <div class="item-meta">{paper['authors']} | {paper['category']}</div>
+            </div>
+            """
     
     html += """
         <div class="footer">
@@ -476,8 +608,8 @@ def send_email(html_content, recipient_email):
         return False
 
 
-def send_discord_brief(weather, top_items):
-    """Send concise summary to Discord #morning-brief using rich embeds."""
+def send_discord_brief(weather, top_story, news_summary):
+    """Send concise summary to Discord #morning-brief."""
     if not DISCORD_WEBHOOK_BRIEF:
         print("⚠️ Discord brief webhook not configured")
         return False
@@ -485,31 +617,30 @@ def send_discord_brief(weather, top_items):
     try:
         today = datetime.now().strftime("%B %d, %Y")
         
-        # Weather embed
         embeds = []
         
+        # Weather embed
         if weather:
             embeds.append({
                 'title': f'🌤️ Weather - {weather["condition"]}',
                 'description': f"**{weather['high']}°F / {weather['low']}°F** in Pittsburgh\n\n{weather['clothing']}",
-                'color': 0x5865F2,  # Discord blurple
+                'color': 0x5865F2,
             })
         
-        # Top items embed
-        if top_items:
-            fields = []
-            for item in top_items[:10]:  # Max 10 items
-                fields.append({
-                    'name': item['title'][:256],  # Discord field name limit
-                    'value': f"[Read More]({item['link']})",
-                    'inline': False
-                })
-            
+        # Top story
+        if top_story:
+            embeds.append({
+                'title': f'⚡ Top Story',
+                'description': f"**[{top_story['title']}]({top_story['link']})**\n\n{top_story.get('explanation', '')}",
+                'color': 0xED4245,  # Red
+            })
+        
+        # News summary
+        if news_summary:
             embeds.append({
                 'title': f'📰 Morning Brief - {today}',
-                'description': 'Top items from papers, news, and tech policy:',
-                'color': 0x57F287,  # Green
-                'fields': fields,
+                'description': news_summary,
+                'color': 0x57F287,
                 'footer': {
                     'text': f'Full brief sent to {JOSHUA_EMAIL}'
                 }
@@ -539,127 +670,50 @@ def send_discord_brief(weather, top_items):
 def main():
     print(f"🦅 Morning Brief starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}")
     
-    sections = []
-    all_items = []
-    
-    # 1. Weather (always first)
+    # 1. Weather
     print("📡 Fetching weather...")
     weather = fetch_weather()
-    if weather:
-        sections.append({
-            "title": "🌤️ Weather & What to Wear",
-            "is_weather": True,
-            "main": f"{weather['high']}°F / {weather['low']}°F | {weather['condition']}",
-            "detail": weather['clothing'],
-        })
     
-    # 2. Papers (Top 3 most relevant, bolded with explanations)
+    # 2. Daily quote
+    quote = get_daily_quote()
+    print(f"💬 Today's quote: {quote[:50]}...")
+    
+    # 3. Fetch all news by category (last 48 hours only)
+    print("📡 Fetching news by category...")
+    all_news_raw = fetch_news_by_category()
+    
+    # Rank and explain news per category
+    news = {}
+    for category, items in all_news_raw.items():
+        print(f"📊 Ranking {category} news...")
+        news[category] = rank_and_explain_news(items, category, max_items=4)
+    
+    # 4. Find top story
+    print("🔍 Identifying top story...")
+    top_story = find_top_story(news)
+    
+    # 5. Papers
     print("📡 Fetching arXiv papers...")
     papers = fetch_arxiv_papers()
-    if papers:
-        sections.append({
-            "title": "📄 Papers Worth Reading",
-            "priority": "These are the top 3 most relevant to ML systems work.",
-            "items": [
-                {
-                    "title": p["title"],
-                    "link": p["link"],
-                    "explanation": p["explanation"],
-                    "meta": f"{p['authors']} | {p['category']}"
-                }
-                for p in papers
-            ]
-        })
-        all_items.extend(papers)
-    
-    # 3. Jobs (separate Discord channel)
-    print("📡 Fetching job postings...")
-    jobs = fetch_jobs()
-    if jobs and DISCORD_WEBHOOK_JOBS:
-        print("📤 Posting jobs to Discord #jobs...")
-        post_jobs_to_discord(jobs, DISCORD_WEBHOOK_JOBS)
-    
-    # Add jobs to email as well
-    if jobs:
-        sections.append({
-            "title": "💼 Jobs - Internships & New Grad Roles",
-            "items": [
-                {
-                    "title": f"{job['company']} - {job['title']}",
-                    "link": job["url"],
-                    "explanation": f"{job['type']} role in {job['location']}. Good fit for ML/infrastructure/data background with PyTorch, CUDA, or distributed systems experience.",
-                    "meta": f"{job['type']} | {job['location']}"
-                }
-                for job in jobs[:15]  # Top 15 in email
-            ]
-        })
-    
-    # 4. ML/AI News
-    print("📡 Fetching RSS feeds...")
-    rss_items = fetch_rss_feeds()
-    
-    print("📡 Fetching Hacker News...")
-    hn = fetch_hackernews()
-    
-    if rss_items or hn:
-        all_news = rss_items + hn
-        sections.append({
-            "title": "📰 ML/AI News",
-            "items": [
-                {
-                    "title": item["title"],
-                    "link": item["link"],
-                    "explanation": item.get("explanation", "Trending on Hacker News."),
-                    "meta": item.get("source", "Hacker News")
-                }
-                for item in all_news
-            ]
-        })
-        all_items.extend(all_news)
-    
-    # 5. Financial
-    print("📡 Fetching financial news...")
-    financial = fetch_financial_news()
-    if financial:
-        sections.append({
-            "title": "💰 Finance & VC",
-            "items": [
-                {
-                    "title": item["title"],
-                    "link": item["link"],
-                    "explanation": item["explanation"],
-                }
-                for item in financial
-            ]
-        })
-        all_items.extend(financial)
-    
-    # 6. Political
-    print("📡 Fetching political news...")
-    political = fetch_political_news()
-    if political:
-        sections.append({
-            "title": "🏛️ Tech Policy",
-            "items": [
-                {
-                    "title": item["title"],
-                    "link": item["link"],
-                    "explanation": item["explanation"],
-                }
-                for item in political
-            ]
-        })
-        all_items.extend(political)
     
     # Generate outputs
     print("📝 Generating email...")
-    html = generate_html_email(sections)
+    html = generate_html_email(weather, quote, top_story, news, papers)
     
     print(f"📧 Sending email to {JOSHUA_EMAIL}...")
     send_email(html, JOSHUA_EMAIL)
     
+    # Discord summary
+    news_summary = ""
+    total_items = sum(len(items) for items in news.values())
+    if total_items > 0:
+        news_summary = f"**{total_items} news items** across politics, markets, tech, and business.\n"
+    if papers:
+        news_summary += f"**{len(papers)} research papers** from arXiv.\n"
+    news_summary += f"\nFull brief with analysis sent to email."
+    
     print("💬 Sending Discord brief notification...")
-    send_discord_brief(weather, all_items)
+    send_discord_brief(weather, top_story, news_summary)
     
     print("✅ Morning brief complete!")
 
